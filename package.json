@@ -1,0 +1,9 @@
+{
+  "dependencies": {
+    "@tensorflow-models/coco-ssd": "^2.2.3",
+    "@tensorflow/tfjs": "^4.22.0",
+    "framer-motion": "^12.23.26",
+    "html2canvas": "^1.4.1",
+    "lucide-react": "^0.562.0"
+  }
+}
