@@ -10,16 +10,27 @@ genai.configure(api_key=os.environ.get("GOOGLE_API_KEY"))
 # [간이 캐싱] 메모리에 결과 저장 (서버가 재시작되면 초기화되지만, 단기 트래픽 방어에 탁월)
 # 실제 프로덕션에서는 Redis 등을 쓰지만, 무료/간편 구현을 위해 In-Memory 방식 채택
 RESULT_CACHE = {}
+MAX_BODY_BYTES = 3 * 1024 * 1024
+MAX_IMAGE_BYTES = 2 * 1024 * 1024
+MAX_CACHE_ENTRIES = 100
 
 class handler(BaseHTTPRequestHandler):
     def do_POST(self):
         try:
-            content_length = int(self.headers['Content-Length'])
+            content_length = int(self.headers.get('Content-Length', '0'))
+            if content_length <= 0 or content_length > MAX_BODY_BYTES:
+                self.send_response(413 if content_length > MAX_BODY_BYTES else 400)
+                self.end_headers()
+                return
             post_data = self.rfile.read(content_length)
             body = json.loads(post_data.decode('utf-8'))
             
+            if not isinstance(body, dict):
+                raise ValueError("Invalid request")
             # Base64 이미지 데이터
             image_data = body.get('image', '')
+            if not isinstance(image_data, str) or not image_data:
+                raise ValueError("Invalid image")
             if ',' in image_data:
                 image_data = image_data.split(',')[1]
             
@@ -38,7 +49,9 @@ class handler(BaseHTTPRequestHandler):
 
             # --- 캐시에 없으면 아래 AI 분석 실행 ---
             
-            image_bytes = base64.b64decode(image_data)
+            image_bytes = base64.b64decode(image_data, validate=True)
+            if not image_bytes or len(image_bytes) > MAX_IMAGE_BYTES:
+                raise ValueError("Invalid image size")
             model = genai.GenerativeModel('gemini-1.5-flash')
 
             prompt = """
@@ -73,6 +86,8 @@ class handler(BaseHTTPRequestHandler):
             result_json = json.loads(response_text)
 
             # 3. 결과 캐싱 (다음 요청을 위해 저장)
+            if len(RESULT_CACHE) >= MAX_CACHE_ENTRIES:
+                RESULT_CACHE.pop(next(iter(RESULT_CACHE)))
             RESULT_CACHE[image_hash] = result_json
 
             self.send_response(200)
@@ -83,4 +98,4 @@ class handler(BaseHTTPRequestHandler):
         except Exception as e:
             self.send_response(500)
             self.end_headers()
-            self.wfile.write(json.dumps({"error": str(e)}).encode('utf-8'))
+            self.wfile.write(json.dumps({"error": "AI analysis failed"}).encode('utf-8'))
